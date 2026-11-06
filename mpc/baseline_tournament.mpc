@@ -1,0 +1,56 @@
+# Baseline for the benchmarks: the "naive" approach of lit review Section 5.1.
+# A knockout tournament of pairwise secure comparisons (MP-SPDZ's built-in
+# integer comparison), log2(n) levels deep, carrying the running (max, second,
+# index) of each bracket.
+#
+# Compile:  ./compile.py -R 64 baseline_tournament.mpc <n> <k> <first|vickrey>
+#
+# Input: each server inputs its additive shares of the n integer bids (the
+# `int` layout of auction/sharing.py). Ties go to the lowest index, matching
+# the bit-slice program, and only the winner and price are opened.
+
+N_SERVERS = 3
+
+n = int(program.args[1])
+k = int(program.args[2])
+mechanism = program.args[3]
+assert mechanism in ('first', 'vickrey')
+
+bids = sum(sint.get_input_from(p, size=n) for p in range(N_SERVERS))
+
+# Each bracket is (max, second max, index of max), all as length-m vectors.
+top = bids
+second = sint(0, size=n)
+index = sint(regint.inc(n))
+
+while top.size > 1:
+    half = top.size // 2
+
+    # Pair neighbours (2i, 2i+1) so every bracket covers a contiguous index range.
+    def left(v):
+        return v.get_vector(0, half, skip=2)
+
+    def right(v):
+        return v.get_vector(1, half, skip=2)
+
+    # The right bracket holds higher indices, so it wins only on a strict >.
+    right_wins = right(top).greater_than(left(top), bit_length=k + 1)
+    new_top = right_wins.if_else(right(top), left(top))
+    new_index = right_wins.if_else(right(index), left(index))
+    if mechanism == 'vickrey':
+        # second = max(loser's top, both seconds); seconds are <= their tops,
+        # so max(loser's top, winner's second) suffices.
+        loser_top = right_wins.if_else(left(top), right(top))
+        winner_second = right_wins.if_else(right(second), left(second))
+        bigger = winner_second.greater_than(loser_top, bit_length=k + 1)
+        new_second = bigger.if_else(winner_second, loser_top)
+    else:
+        new_second = left(second)
+    if top.size % 2:
+        new_top = sint.concat([new_top, top.get_vector(2 * half, 1)])
+        new_second = sint.concat([new_second, second.get_vector(2 * half, 1)])
+        new_index = sint.concat([new_index, index.get_vector(2 * half, 1)])
+    top, second, index = new_top, new_second, new_index
+
+price = top if mechanism == 'first' else second
+print_ln('RESULT winner=%s price=%s', index.reveal(), price.reveal())

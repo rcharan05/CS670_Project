@@ -1,0 +1,22 @@
+% 3-party replicated secret sharing: each server holds two of the three shares.
+\begin{tikzpicture}
+  \node[box, font=\normalsize] (x) at (0, 2.5)
+    {$x = x_0 + x_1 + x_2$\quad(arithmetic, mod $2^{64}$)\\[2pt]
+     $x = x_0 \oplus x_1 \oplus x_2$\quad(binary, single bits)};
+
+  \node[server] (p0) at (-3.0, 0)   {Server 0\\\footnotesize holds $(x_0, x_1)$};
+  \node[server] (p1) at ( 3.0, 0)   {Server 1\\\footnotesize holds $(x_1, x_2)$};
+  \node[server] (p2) at ( 0, -2.0)  {Server 2\\\footnotesize holds $(x_2, x_0)$};
+  \draw[link] (p0) -- (p1);
+  \draw[link] (p1) -- (p2);
+  \draw[link] (p2) -- (p0);
+
+  \draw[arr, dashed] (x.south) -- ++(0,-0.5) -| (p0.north);
+  \draw[arr, dashed] (x.south) -- ++(0,-0.5) -| (p1.north);
+  \draw[arr, dashed] (x.south) -- (p2.north);
+
+  \node[note, text width=4.2cm] at (-5.2, -2.1) {one server alone sees two\\
+    uniformly random shares\\$\Rightarrow$ learns nothing about $x$};
+  \node[note, text width=4.2cm] at (5.2, -2.1) {$x + y$, $x \oplus y$: local\\
+    $x \cdot y$, $x \wedge y$: each server\\sends \textbf{one} share to a neighbour};
+\end{tikzpicture}

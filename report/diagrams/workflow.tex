@@ -1,0 +1,23 @@
+% End-to-end workflow of one auction run, with the source file for each step.
+\begin{tikzpicture}[node distance=0.55cm and 0.7cm]
+  \node[stepbox, secret] (s1) {\textbf{1. Share}\\bidder splits its bid\\into 3 random shares};
+  \node[stepbox, plain, right=of s1] (s2) {\textbf{2. Distribute}\\server $p$ writes its\\shares to its input file};
+  \node[stepbox, plain, right=of s2] (s3) {\textbf{3. Compile}\\\texttt{.mpc} $\to$ bytecode\\for given $n,k$, mechanism};
+
+  \node[stepbox, server, below=1.2cm of s3] (s4) {\textbf{4. Compute}\\3 party processes run\\the bit-slice circuit};
+  \node[stepbox, outbox, left=of s4] (s5) {\textbf{5. Open}\\only winner and\\price are revealed};
+  \node[stepbox, plain, left=of s5] (s6) {\textbf{6. Report}\\parse result + cost;\\tests check vs.\ reference};
+
+  \draw[arr] (s1) -- (s2);
+  \draw[arr] (s2) -- (s3);
+  \draw[arr] (s3) -- (s4);
+  \draw[arr] (s4) -- (s5);
+  \draw[arr] (s5) -- (s6);
+
+  \node[code, below=1pt of s1] {auction/sharing.py};
+  \node[code, below=1pt of s2] {Input-P\{0,1,2\}-0};
+  \node[code, below=1pt of s3] {mpc/auction*.mpc};
+  \node[code, below=1pt of s4] {*-party.x $\times 3$};
+  \node[code, below=1pt of s5] {audit.py checks};
+  \node[code, below=1pt of s6] {runner.py, cli.py, tests/};
+\end{tikzpicture}

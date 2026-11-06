@@ -1,0 +1,29 @@
+% Arithmetic vs binary domain: same circuit, different cost per AND.
+\begin{tikzpicture}
+  % ---- arithmetic panel
+  \node[lbl, font=\small\bfseries, text=vink] at (2.6, 2.9) {Arithmetic domain ($\mathbb{Z}_{2^{64}}$)};
+  \node[font=\small, anchor=west] at (0, 2.2) {one secret bit $b \in \{0,1\}$ is held as:};
+  \foreach \i/\y in {0/1.55, 1/0.95, 2/0.35} {
+    \node[secret, minimum width=4.6cm, minimum height=0.42cm, inner sep=1pt, anchor=west]
+      at (0.4, \y) {\footnotesize 64-bit share $x_{\i}$};
+  }
+  \node[note, anchor=west, text width=5.3cm, align=left] at (0, -0.55)
+    {AND $=$ ring multiplication\\$\Rightarrow$ \textbf{64 bits} sent per server per AND};
+
+  % ---- binary panel
+  \begin{scope}[xshift=7.2cm]
+    \node[lbl, font=\small\bfseries, text=vink] at (2.6, 2.9) {Binary domain (XOR-shared bits)};
+    \node[font=\small, anchor=west] at (0, 2.2) {bit $j$ of all $n$ bidders in one word:};
+    \foreach \i/\lab in {0/$b_0$, 1/$b_1$, 2/$b_2$, 3/$b_3$, 4/$\cdots$, 5/$b_{n-1}$} {
+      \node[bitcell, fill=vbluebg, draw=vblue, minimum width=0.8cm] at ({0.8*\i+0.6}, 1.25) {\footnotesize \lab};
+    }
+    \node[lbl] at (2.6, 0.6) {lane $i$ = bit $j$ of bidder $i$ (XOR-shared)};
+    \node[note, anchor=west, text width=6.2cm, align=left] at (0, -0.55)
+      {AND of two words $= n$ ANDs in one step\\$\Rightarrow$ \textbf{1 bit} sent per server per AND\\XOR and NOT are free};
+  \end{scope}
+
+  \draw[draw=vline] (6.6, -1.2) -- (6.6, 3.1);
+  \node[outbox, text width=11.5cm] at (6.5, -2.0)
+    {same circuit, same AND count (29\,505 for $n{=}128$, $k{=}32$, Vickrey):\quad
+     \textbf{0.269 MB} $\to$ \textbf{0.0044 MB} per server (61$\times$ less)};
+\end{tikzpicture}

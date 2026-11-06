@@ -1,0 +1,26 @@
+% One step of the oblivious scan (bit position j); all wires carry secret shares.
+\begin{tikzpicture}
+  \node[secret, minimum width=2.3cm] (S) at (0, 1.5) {mask $S$\\\footnotesize $n$ secret bits};
+  \node[secret, minimum width=2.3cm] (b) at (0, -0.6) {$b[j]$\\\footnotesize bit $j$ of all bids};
+
+  \node[gate] (and) at (2.9, -0.6) {$t = S \wedge b[j]$\\[-2pt]\scriptsize $n$ ANDs};
+  \node[gate] (or) at (6.0, -0.6) {OR tree\\[-2pt]\scriptsize $n{-}1$ ANDs};
+  \node[gate] (upd) at (9.3, -0.6) {$S' = S - c_j(S - t)$\\[-2pt]\scriptsize $n$ ANDs};
+  \node[secret, minimum width=1.9cm] (Sn) at (12.5, -0.6) {new mask $S'$};
+  \node[secret] (cj) at (7.65, 0.55) {$c_j$ = bit $j$ of max};
+
+  \draw[arr] (b) -- (and);
+  \draw[arr] (S.east) -| (and.north);
+  \draw[arr] (S.east) -| (upd.north);
+  \draw[arr] (and) -- node[lbl, above] {$t$} (or);
+  \draw[arr] (or) -- node[lbl, below] {$c_j$} (upd);
+  \draw[arr] (7.65, -0.6) -- (cj.south);
+  \draw[arr] (and.south) -- ++(0, -0.75) -| node[lbl, pos=0.25, above] {$t$} (upd.south);
+  \draw[arr] (upd) -- (Sn);
+  \draw[arr, dashed, draw=vline] (Sn.north) |- node[lbl, pos=0.75, above] {next bit $j-1$}
+      ($(S.north)+(0,0.5)$) -- (S.north);
+
+  \node[note, text width=11cm] at (6.0, -2.35)
+    {if some survivor has a 1 here ($c_j = 1$), drop the survivors with a 0;
+     otherwise keep $S$ unchanged. No branch: the same gates run either way.};
+\end{tikzpicture}

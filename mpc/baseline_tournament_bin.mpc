@@ -1,0 +1,90 @@
+# Comparison-tournament baseline in the BINARY domain, for a fair comparison
+# with auction_bin.mpc (same sharing, same protocol, same outputs).
+#
+# Compile:  ./compile.py baseline_tournament_bin.mpc <n> <k> <first|vickrey>
+# Run with: replicated-bin-party.x
+#
+# Values are packed lane-wise (lane i = bracket i) in sbitintvec rows, so
+# each tournament level is one vectorised comparison (MP-SPDZ's binary
+# comparison circuit) plus multiplexers. Ties go to the lowest index.
+
+import operator
+from functools import reduce
+
+N_SERVERS = 3
+
+n = int(program.args[1])
+k = int(program.args[2])
+mechanism = program.args[3]
+assert mechanism in ('first', 'vickrey')
+assert k <= 62
+
+width = k + 1                       # one spare sign bit: values are unsigned
+idx_bits = max(1, (n - 1).bit_length())
+sb_k = sbits.get_type(k)
+siv = sbitintvec.get_type(width)
+
+
+def word(bit_list):
+    return sbits.get_type(len(bit_list)).bit_compose(bit_list)
+
+
+def lanes(w, size):
+    return w.bit_decompose(size)
+
+
+def pick(rows, size, start):
+    """Take lanes start, start+2, ... of every row word (local)."""
+    return [word(lanes(r, size)[start::2]) for r in rows]
+
+
+def mux(cond, x_rows, y_rows):
+    """Lane-wise cond ? x : y on rows of words: one AND per bit per lane."""
+    return [y ^ (cond & (x ^ y)) for x, y in zip(x_rows, y_rows)]
+
+
+# --- input ------------------------------------------------------------------------
+bids = [reduce(operator.xor, [sb_k.get_input_from(p) for p in range(N_SERVERS)])
+        for i in range(n)]
+zero_row = word([sbit(0)] * n)
+top = [word([lanes(b, k)[j] for b in bids]) for j in range(k)] + [zero_row]
+second = [zero_row] * width
+index = [word([sbit((i >> m) & 1) for i in range(n)]) for m in range(idx_bits)]
+
+# --- tournament -------------------------------------------------------------------
+size = n
+while size > 1:
+    half = size // 2
+    L_top, R_top = pick(top, size, 0), pick(top, size, 1)
+    if size % 2:
+        L_top = [word(lanes(r, half + 1)[:half]) for r in L_top]
+    L_idx, R_idx = pick(index, size, 0), pick(index, size, 1)
+    L_sec, R_sec = pick(second, size, 0), pick(second, size, 1)
+    if size % 2:
+        L_idx = [word(lanes(r, half + 1)[:half]) for r in L_idx]
+        L_sec = [word(lanes(r, half + 1)[:half]) for r in L_sec]
+
+    # Right bracket has higher indices: it wins only on a strict >.
+    right_wins = (siv.from_vec(R_top) > siv.from_vec(L_top)).v[0]
+    new_top = mux(right_wins, R_top, L_top)
+    new_idx = mux(right_wins, R_idx, L_idx)
+    if mechanism == 'vickrey':
+        loser_top = mux(right_wins, L_top, R_top)
+        winner_sec = mux(right_wins, R_sec, L_sec)
+        bigger = (siv.from_vec(winner_sec) > siv.from_vec(loser_top)).v[0]
+        new_sec = mux(bigger, winner_sec, loser_top)
+    else:
+        new_sec = L_sec
+
+    if size % 2:  # odd bracket out: carried to the next level unchanged
+        carry = lambda rows, new: [word(lanes(r, half) + [lanes(o, size)[size - 1]])
+                                   for r, o in zip(new, rows)]
+        new_top, new_idx, new_sec = (carry(top, new_top), carry(index, new_idx),
+                                     carry(second, new_sec))
+    top, index, second = new_top, new_idx, new_sec
+    size = (size + 1) // 2
+
+price_rows = top if mechanism == 'first' else second
+winner = word(index + [sbit(0)])            # top 0: reveal as unsigned
+price = word(price_rows[:k] + [sbit(0)])
+print_ln('RESULT winner=%s price=%s', winner.reveal(), price.reveal())

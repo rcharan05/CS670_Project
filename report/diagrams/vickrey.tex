@@ -1,0 +1,25 @@
+% Vickrey pipeline: two scans; the first-scan maximum is never opened.
+\begin{tikzpicture}[node distance=0.55cm and 0.75cm]
+  \node[secret, minimum width=2.0cm] (B) {secret bits\\$b_i[j]$};
+  \node[gate, right=of B, minimum height=0.9cm] (s1) {scan 1};
+  \node[gate, right=of s1, minimum height=0.9cm] (tb) {tie-break};
+  \node[secret, right=of tb] (w) {one-hot $w$\\\footnotesize (secret)};
+  \node[outbox, right=1.0cm of w] (win) {\textbf{open}\\winner $\sum_i i\, w_i$};
+
+  \node[secret, above=0.75cm of s1] (c1) {max bits $c_j$\\\footnotesize never opened};
+  \node[gate, below=1.15cm of w, minimum height=0.9cm] (zero) {$b_i[j] \wedge \lnot w_i$\\[-2pt]\scriptsize remove winner};
+  \node[gate, right=of zero, minimum height=0.9cm] (s2) {scan 2};
+  \node[outbox, right=0.75cm of s2] (price) {\textbf{open}\\price $\sum_j c'_j 2^j$};
+
+  \draw[arr] (B) -- (s1);
+  \draw[arr] (s1) -- node[lbl, above] {$S$} (tb);
+  \draw[arr] (tb) -- (w);
+  \draw[outarr] (w) -- (win);
+  \draw[arr] (s1) -- (c1);
+  \draw[arr] (w) -- (zero);
+  \draw[arr] (B.south) |- ($(zero.west)+(0,-0.15)$);
+  \draw[arr] (zero) -- (s2);
+  \draw[outarr] (s2) -- node[lbl, above] {$c'_j$} (price);
+
+  \node[note, right=0.3cm of c1, text width=5.2cm, align=left] {(first-price instead opens\\price $= \sum_j c_j 2^j$ from scan 1)};
+\end{tikzpicture}

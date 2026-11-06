@@ -1,0 +1,37 @@
+% System architecture: bidders secret-share their bids to three servers,
+% which jointly compute and open only the winner and the price.
+\begin{tikzpicture}[node distance=0.5cm]
+  % bidders
+  \node[bidder] (b1) at (0, 2.1) {Bidder 1\\[-1pt]\footnotesize bid $b_1$};
+  \node[bidder] (b2) at (0, 0.7) {Bidder 2\\[-1pt]\footnotesize bid $b_2$};
+  \node[lbl]    (bd) at (0, -0.35) {$\vdots$};
+  \node[bidder] (bn) at (0, -1.4) {Bidder $n$\\[-1pt]\footnotesize bid $b_n$};
+
+  % servers
+  \node[server] (s0) at (5.2, 2.1)  {Server 0};
+  \node[server] (s1) at (5.2, 0.35) {Server 1};
+  \node[server] (s2) at (5.2, -1.4) {Server 2};
+  \draw[link] (s0.east) to[bend left=28] (s2.east);
+  \draw[link] (s0) -- (s1);
+  \draw[link] (s1) -- (s2);
+
+  % shares
+  \foreach \b in {b1, b2, bn} {
+    \foreach \s/\p in {s0/0, s1/1, s2/2} {
+      \draw[sharearr] (\b.east) -- (\s.west);
+    }
+  }
+  \node[note] at (2.6, -2.45) {share $p$ of each bid goes to server $p$ only};
+
+  % MPC region
+  \begin{scope}[on background layer]
+    \node[region, fit=(s0)(s1)(s2), inner xsep=24pt, inner ysep=12pt,
+          label={[lbl]above:MP-SPDZ, 3-party replicated secret sharing}] (mpc) {};
+  \end{scope}
+
+  % output
+  \node[outbox, minimum width=2.6cm] (out) at (9.8, 0.35)
+    {\textbf{opened output}\\winner $i^\star$\\price $p$};
+  \draw[outarr] (mpc.east |- out) -- (out.west);
+  \node[note] at (9.8, -1.15) {nothing else\\is ever opened};
+\end{tikzpicture}

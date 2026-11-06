@@ -1,0 +1,97 @@
+# Bit-slice auction in the BINARY domain (GF(2) secret sharing).
+#
+# Compile:  ./compile.py auction_bin.mpc <n> <k> <first|vickrey>
+# Run with: replicated-bin-party.x  (3 parties, semi-honest, honest majority)
+#
+# Same circuit and same opened outputs as auction.mpc, but every secret is a
+# single XOR-shared bit, so an AND costs each server 1 bit of communication
+# instead of one 64-bit ring element, and XOR / NOT are free. Bit j of all n
+# bidders is packed into one n-bit word ("lane" i = bidder i), so each step of
+# the scan is a single word-wide AND.
+#
+# Input: server p inputs its XOR share of every bidder's k-bit bid, one value
+# per bidder (the `xor` layout of auction/sharing.py).
+
+import operator
+from functools import reduce
+
+N_SERVERS = 3
+
+n = int(program.args[1])
+k = int(program.args[2])
+mechanism = program.args[3]
+assert mechanism in ('first', 'vickrey')
+assert k <= 63  # price is revealed as a (k+1)-bit word
+
+sb_k = sbits.get_type(k)
+
+
+def word(bit_list):
+    """Pack secret bits into one word, lane i = bit_list[i] (local)."""
+    return sbits.get_type(len(bit_list)).bit_compose(bit_list)
+
+
+def lanes(w, size):
+    """Unpack a word into its `size` lane bits (local)."""
+    return w.bit_decompose(size)
+
+
+def any_lane(w, size):
+    """OR over all lanes: a tree of word-wide ORs, ceil(log2 n) AND rounds."""
+    bits = lanes(w, size)
+    while len(bits) > 1:
+        half = len(bits) // 2
+        merged = word(bits[:half]) | word(bits[half:2 * half])  # a^b^(a&b)
+        bits = lanes(merged, half) + bits[2 * half:]
+    return bits[0]
+
+
+def exclusive_prefix_and(bits):
+    """out[i] = AND_{l<i} bits[l] (out[0] = 1), Hillis-Steele on words."""
+    size = len(bits)
+    d = 1
+    while d < size:
+        shifted = word(bits[d:]) & word(bits[:size - d])
+        bits = bits[:d] + lanes(shifted, size - d)
+        d *= 2
+    return [sbit(1)] + bits[:size - 1]
+
+
+def bitslice_scan(B):
+    """B[j]: n-lane word holding bit j of every bidder.
+    Returns (mask word, c) with c[j] = bit j of the maximum."""
+    S = word([sbit(1)] * n)
+    c = [None] * k
+    for j in reversed(range(k)):
+        t = S & B[j]                                 # survivor has a 1 here
+        c[j] = any_lane(t, n)                        # OR over all bidders
+        S = S ^ (word([c[j]] * n) & (S ^ t))         # = S AND (b OR NOT c)
+    return S, c
+
+
+# --- input: XOR the three servers' shares, then transpose to bit-major -------
+bids = [reduce(operator.xor, [sb_k.get_input_from(p) for p in range(N_SERVERS)])
+        for i in range(n)]
+B = [word([lanes(b, k)[j] for b in bids]) for j in range(k)]
+
+# --- first scan: winner ---------------------------------------------------------
+mask, c = bitslice_scan(B)
+mask_bits = lanes(mask, n)
+# Keep only the lowest-index survivor so ties are not revealed.
+not_before = exclusive_prefix_and([~s for s in mask_bits])
+w = [m & e for m, e in zip(mask_bits, not_before)]
+# w is one-hot, so bit m of the winner's index is the XOR of w[i] over all i
+# whose index has bit m set (local).
+idx_bits = max(1, (n - 1).bit_length())
+winner = word([reduce(operator.xor, [w[i] for i in range(n) if (i >> m) & 1], sbit(0))
+               for m in range(idx_bits)] + [sbit(0)])  # top 0: reveal as unsigned
+
+# --- price ----------------------------------------------------------------------
+if mechanism == 'first':
+    price_bits = c
+else:
+    keep = ~word(w)
+    _, price_bits = bitslice_scan([b & keep for b in B])
+price = word(price_bits + [sbit(0)])  # top 0: reveal as unsigned
+
+print_ln('RESULT winner=%s price=%s', winner.reveal(), price.reveal())

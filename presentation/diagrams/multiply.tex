@@ -1,0 +1,23 @@
+% Multiplying two replicated-shared values: the 9 cross terms of x*y, coloured by
+% the server that can compute each one from the two shares it holds.
+\begin{tikzpicture}[cell/.style={draw=white, line width=1.2pt, minimum size=1.05cm, font=\small}]
+  \foreach \i/\j/\c in {0/0/vbluebg, 0/1/vbluebg, 1/0/vbluebg,
+                        1/1/vorangebg, 1/2/vorangebg, 2/1/vorangebg,
+                        2/2/vaquabg, 2/0/vaquabg, 0/2/vaquabg} {
+    \node[cell, fill=\c] at (\j*1.05, -\i*1.05) {$x_\i y_\j$};
+  }
+  \foreach \i in {0,1,2} {
+    \node[lbl] at (-0.85, -\i*1.05) {$x_\i$};
+    \node[lbl] at (\i*1.05, 0.85) {$y_\i$};
+  }
+  \node[lbl] at (-0.85, 0.85) {$\times$};
+
+  \node[box, fill=vbluebg, draw=vblue, anchor=west, text width=3.0cm, align=left]
+    (k0) at (3.3, 0.35) {\textbf{Server 0} holds\\$x_0, x_1$ and $y_0, y_1$};
+  \node[box, fill=vorangebg, draw=vorange, anchor=west, text width=3.0cm, align=left]
+    (k1) at (3.3, -1.05) {\textbf{Server 1} holds\\$x_1, x_2$ and $y_1, y_2$};
+  \node[box, fill=vaquabg, draw=vaqua, anchor=west, text width=3.0cm, align=left]
+    (k2) at (3.3, -2.45) {\textbf{Server 2} holds\\$x_2, x_0$ and $y_2, y_0$};
+  \node[note, text width=6cm] at (1.05, -3.55)
+    {$x \cdot y$ = sum of all 9 squares; each server computes its 3};
+\end{tikzpicture}

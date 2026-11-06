@@ -1,0 +1,22 @@
+% Log-depth n-input OR used at every bit position (n = 8 shown).
+\begin{tikzpicture}[x=0.95cm, y=1.0cm]
+  \foreach \i in {0,...,7}
+    \node[secret, minimum width=0.75cm, inner sep=2pt] (t\i) at (\i, 0) {$t_{\i}$};
+  \foreach \i/\a/\b in {0/0/1, 1/2/3, 2/4/5, 3/6/7} {
+    \node[gate, minimum width=0.7cm] (l\i) at ({\a+0.5}, 1.15) {$\vee$};
+    \draw[arr] (t\a) -- (l\i); \draw[arr] (t\b) -- (l\i);
+  }
+  \foreach \i/\a/\b in {0/0/1, 1/2/3} {
+    \node[gate, minimum width=0.7cm] (m\i) at ({2*\a+1.5}, 2.3) {$\vee$};
+    \draw[arr] (l\a) -- (m\i); \draw[arr] (l\b) -- (m\i);
+  }
+  \node[gate, minimum width=0.7cm] (r) at (3.5, 3.45) {$\vee$};
+  \draw[arr] (m0) -- (r); \draw[arr] (m1) -- (r);
+  \node[secret] (c) at (3.5, 4.5) {$c_j$};
+  \draw[arr] (r) -- (c);
+
+  \foreach \y/\lab in {1.15/round 1, 2.3/round 2, 3.45/round 3}
+    \node[lbl, anchor=west] at (7.6, \y) {\lab};
+  \node[note, anchor=west, text width=4.2cm] at (8.9, 2.3)
+    {$x \vee y = 1 - (1-x)(1-y)$\\one AND per gate\\[2pt]$n-1$ ANDs, $\lceil\log_2 n\rceil$ rounds};
+\end{tikzpicture}

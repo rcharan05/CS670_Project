@@ -1,0 +1,686 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.4cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{graphicx}
+\usepackage{booktabs,multirow,array,tabularx}
+\usepackage{float}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage[hidelinks]{hyperref}
+\usepackage[nameinlink]{cleveref}
+
+\input{diagrams/styles.tex}
+
+\newfloat{algo}{tbp}{loa}
+\floatname{algo}{Algorithm}
+\crefname{algo}{Algorithm}{Algorithms}
+
+\lstset{basicstyle=\small\ttfamily, mathescape=true, columns=flexible,
+        keepspaces=true, frame=single, rulecolor=\color{vline},
+        xleftmargin=6pt, xrightmargin=6pt, aboveskip=4pt, belowskip=2pt,
+        keywordstyle=\bfseries, morekeywords={for,to,downto,return,if,else}}
+
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\code}[1]{\texttt{#1}}
+\setlist{itemsep=2pt, topsep=4pt}
+
+\title{\textbf{Final Project Report:}\\\textbf{Privacy-Preserving Sealed-Bid Auctions}}
+\author{
+  \begin{tabular}{cc}
+    Aarav Oswal (230012) & Ch.\ Rishitha (230311)\\
+    R.\ Charan (230819) & Poorvie Sadagopan (230759)
+  \end{tabular}\\[10pt]
+  CS670 Project Group\\
+  Department of Computer Science and Engineering\\
+  Indian Institute of Technology Kanpur
+}
+\date{November 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We implement a sealed-bid auction, supporting both first-price and second-price (Vickrey) rules,
+in which no single party ever sees an individual bid. Bidders split their bids into secret shares
+held by three servers, which jointly evaluate the Kurosawa--Ogata bit-slice maximum circuit on
+MP-SPDZ using 3-party replicated secret sharing (semi-honest, honest majority). The compiled program
+opens exactly two values: the winner's index and the clearing price. We give an oblivious,
+branch-free formulation of the scan, an oblivious lowest-index tie-break that hides who tied,
+and a second oblivious scan for the Vickrey price. The circuit is implemented in both the
+arithmetic domain ($\Z_{2^{64}}$) and the binary domain (XOR-shared bits); a knockout tournament of
+secure comparisons in each domain serves as the baseline. Correctness is validated by 147
+automated tests against a plaintext reference. Across 152 benchmark configurations, our cost model
+predicts the compiler's AND count exactly; moving to the binary domain reduces communication by
+$61\times$; and the tournament baseline, whose round count grows only logarithmically in the bid
+length, is faster on every realistic network. We discuss what this means for the round-complexity
+argument in our literature survey, and report the overhead of malicious security.
+\end{abstract}
+
+% ==============================================================================
+\section{Introduction}
+
+A classical sealed-bid auction needs a trusted auctioneer who opens every envelope. That
+auctioneer learns every bidder's valuation, and in a Vickrey auction can inflate the clearing price
+undetectably. Our literature survey traced how cryptography removes this trust: first by splitting
+the auctioneer across two non-colluding servers (Naor, Pinkas and Sumner~\cite{nps99}), then across
+several servers holding secret shares (Bogetoft et al.~\cite{bogetoft06,bogetoft09}), whose system
+ran the Danish sugar-beet auction of 2008. The mid-term report committed us to implementing this
+secret-sharing approach, with the bit-slice circuit of Kurosawa and Ogata~\cite{ko02} as its engine.
+
+This report describes the finished system. Its privacy target, stated in the survey and kept
+unchanged, is:
+
+\begin{quote}
+\emph{The protocol reveals the identity of the winner and the clearing price, and nothing else
+about any bid, under a semi-honest adversary corrupting at most one of the three servers.}
+\end{quote}
+
+\paragraph{Contributions.}
+\begin{itemize}
+  \item A working 3-server implementation on MP-SPDZ~\cite{mpspdz} of first-price and Vickrey
+        auctions using the bit-slice circuit, with an oblivious tie-break and a reveal audit showing
+        that exactly the winner and the price are opened (\cref{sec:design}).
+  \item An exact cost model, $k(3n-1)$ ANDs and $k(\lceil\log_2 n\rceil+2)$ rounds per scan,
+        matched exactly by the compiler across all configurations (\cref{sec:eval}).
+  \item The same circuit in the binary domain, which cuts communication by $61\times$, plus a
+        comparison-tournament baseline in both domains for a fair evaluation.
+  \item An honest comparison: on modern MPC the tournament baseline needs far fewer rounds, which
+        qualifies the survey's claim that the bit-slice scan wins on round complexity
+        (\cref{sec:discussion}).
+  \item A tested, reproducible code base (Linux and Windows via WSL) with 147 automated tests.
+\end{itemize}
+
+% ==============================================================================
+\section{Background}
+\label{sec:background}
+
+\paragraph{Replicated secret sharing.}
+We use the 3-party protocol of Araki et al.~\cite{araki16}. A value $x$ is split into three
+random shares with $x = x_0 + x_1 + x_2$, and server $p$ holds the pair $(x_p, x_{p+1})$
+(\cref{fig:replicated}). Each pair alone is uniformly random, so one server learns nothing.
+Additions and multiplications by public constants are local. A multiplication costs each server
+one message of one ring element to its neighbour, in one round. The scheme works over the ring
+$\Z_{2^{64}}$ (``arithmetic domain'') or over single bits with XOR as addition and AND as
+multiplication (``binary domain''). It tolerates one semi-honest corruption; two colluding
+servers can reconstruct everything.
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.86\linewidth}{!}{\input{diagrams/replicated.tex}}
+  \caption{3-party replicated secret sharing. Each server holds two of the three shares; one
+           server alone sees only random values. Local operations are free; each multiplication
+           (AND) costs one share sent per server.}
+  \label{fig:replicated}
+\end{figure}
+
+\paragraph{MP-SPDZ.}
+MP-SPDZ~\cite{mpspdz} compiles a high-level Python-like program (\code{.mpc}) into bytecode that
+any of its protocols can execute. It reports the exact number of multiplications (``triples''),
+rounds and opened values the program needs, which we use both to audit the output boundary and to
+validate our cost model. It also implements malicious variants of the same protocols (security
+with abort)~\cite{lindellnof17,furukawa17}, which we use in \cref{sec:security-eval}.
+
+\paragraph{The bit-slice maximum.}
+Kurosawa and Ogata~\cite{ko02} find the maximum of $n$ hidden $k$-bit numbers by one scan from the
+most significant bit down, keeping a mask $S$ of bidders who could still hold the maximum. At each
+bit, if some survivor has a 1, all survivors with a 0 are eliminated. Only AND and OR on bits are
+needed, so the scan can run in any MPC that supports them.
+
+% ==============================================================================
+\section{System Design}
+\label{sec:design}
+
+\subsection{Architecture and threat model}
+
+\Cref{fig:architecture} shows the system. Each bidder secret-shares its bid and sends share $p$
+to server $p$. The three servers run the auction circuit under MP-SPDZ and open only the winner
+and the price. The threat model is that of the survey (\S7): servers and bidders follow the
+protocol (semi-honest) but may try to learn from what they see; at most one server is corrupted;
+collusion of two servers is outside the model.
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.92\linewidth}{!}{\input{diagrams/architecture.tex}}
+  \caption{System architecture. Bidders are not servers: they only send random-looking shares.
+           The servers compute jointly and open only the winner $i^\star$ and price $p$.}
+  \label{fig:architecture}
+\end{figure}
+
+\subsection{Input sharing}
+\label{sec:input}
+
+Bidders share their bids locally (\code{auction/sharing.py}). Each bidder first writes its bid in
+binary, which is trivial for the bidder, and then shares every bit separately:
+\begin{itemize}
+  \item \textbf{arithmetic domain}: each bit $b_i[j]$ is split into three additive shares modulo
+        $2^{64}$;
+  \item \textbf{binary domain}: the bid is split into three $k$-bit XOR shares.
+\end{itemize}
+The servers therefore receive shares of the bits directly and never have to extract bits from a
+shared number.
+Each server feeds its shares to MP-SPDZ as private inputs, and the program adds (or XORs) the three
+inputs \emph{inside} the computation, so the reconstructed bid exists only in shared form. Server
+$p$'s input file holds a $k \times n$ matrix of shares in bit-major order (row $j$ holds bit $j$ of
+every bidder), so each bit position is read as one contiguous vector.
+
+\subsection{The oblivious bit-slice scan}
+\label{sec:scan}
+
+The survey describes the update step as a branch on the check bit. A branch on secret data would
+leak it, so we write the step as pure arithmetic on shared 0/1 values (\cref{alg:scan},
+\cref{fig:bitcircuit}). Let $t_i = S_i \cdot b_i[j]$ (survivor $i$ has a 1 at bit $j$) and
+$c_j = \bigvee_i t_i$. The required update $S_i \leftarrow S_i \cdot (1 - c_j(1 - b_i[j]))$
+expands to
+\begin{equation}
+  S_i' \;=\; S_i - c_j\,(S_i - t_i),
+  \label{eq:update}
+\end{equation}
+which reuses $t_i$ and needs one multiplication per bidder instead of two. The $n$-input OR is a
+balanced tree of $x \vee y = 1 - (1-x)(1-y)$, with $n-1$ ANDs in $\lceil\log_2 n\rceil$ rounds
+(\cref{fig:ortree}). Since every $c_j$ is a bit of the maximum, the maximum itself is
+$\sum_j c_j 2^j$ at no extra cost.
+
+\begin{algo}[t]
+\begin{lstlisting}
+Input: shared bits $b_i[j]$ for bidders $i = 0..n-1$, bits $j = 0..k-1$
+$S \leftarrow (1, \dots, 1)$                                  $\textit{// all bidders survive}$
+for $j = k-1$ downto $0$:
+    $t \leftarrow S \cdot b[j]$                                 $\textit{// n ANDs, vectorised}$
+    $c_j \leftarrow 1 - \prod_i (1 - t_i)$                        $\textit{// OR tree: n-1 ANDs}$
+    $S \leftarrow S - c_j\,(S - t)$                             $\textit{// n ANDs, Eq. (1)}$
+return mask $S$, maximum bits $(c_{k-1}, \dots, c_0)$
+\end{lstlisting}
+\caption{Oblivious bit-slice scan (\code{bitslice\_scan} in \code{mpc/auction.mpc}). No step
+depends on a secret value, so the compiled circuit is fixed by $n$, $k$ and the mechanism.}
+\label{alg:scan}
+\end{algo}
+
+\begin{figure}[t]
+  \centering
+  \resizebox{\linewidth}{!}{\input{diagrams/bit_circuit.tex}}
+  \caption{One step of the scan. All wires carry secret shares; the same gates run whatever the
+           data, so the step is oblivious.}
+  \label{fig:bitcircuit}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \resizebox{0.78\linewidth}{!}{\input{diagrams/or_tree.tex}}
+  \caption{The $n$-input OR computed at every bit position ($n=8$).}
+  \label{fig:ortree}
+\end{figure}
+
+\Cref{fig:worked} replays the survey's worked example ($A = 11$, $B = 13$, $C = 9$) through
+\cref{alg:scan}. It also corrects Table~1 of the survey, which printed the mask after bits 1 and 0
+as $\{\}$: when no survivor has a 1 the mask is carried forward, so it stays $\{B\}$. Our test
+suite checks this trace exactly (\code{test\_worked\_example\_trace}).
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.85\linewidth}{!}{\input{diagrams/worked_example.tex}}
+  \caption{The scan on the survey's example. Blue cells: bidder still a survivor at that bit.
+           This corrects the last two rows of Table~1 in the survey.}
+  \label{fig:worked}
+\end{figure}
+
+\subsection{Ties: an oblivious lowest-index winner}
+
+When several bidders share the maximum, the final mask contains all of them. Opening it would
+reveal who tied, a leak the privacy target forbids. Instead we keep only the first survivor,
+$w_i = S_i \prod_{l<i} (1 - S_l)$, using a Hillis--Steele prefix product in $\lceil\log_2 n\rceil$
+rounds, and open only $\sum_i i \cdot w_i$ (\cref{fig:tiebreak}). The tournament baseline uses the
+same tie rule, so all programs produce identical outputs.
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.8\linewidth}{!}{\input{diagrams/tiebreak.tex}}
+  \caption{Oblivious lowest-index tie-break: three bidders tie, but only the index of the first is
+           opened.}
+  \label{fig:tiebreak}
+\end{figure}
+
+\subsection{The Vickrey extension}
+
+For the second price we remove the winner obliviously and scan again (\cref{fig:vickrey}): every
+bit of the winner is zeroed with $b_i[j] \leftarrow b_i[j]\,(1 - w_i)$, and the new maximum is the
+second-highest bid. The first-scan bits $c_j$, which encode the winning bid, are never opened.
+Two edge cases come out right without special handling: tied top bids give a price equal to the top
+bid, and a single bidder pays 0. The cost roughly doubles.
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.95\linewidth}{!}{\input{diagrams/vickrey.tex}}
+  \caption{Vickrey pipeline. Secret values in blue, opened values in green. Only the winner index
+           and the second-scan maximum are opened.}
+  \label{fig:vickrey}
+\end{figure}
+
+\subsection{The binary-domain instantiation}
+\label{sec:binary}
+
+The scan only ever combines single bits, yet in $\Z_{2^{64}}$ each AND is a full 64-bit ring
+multiplication. \code{mpc/auction\_bin.mpc} runs the identical circuit on XOR-shared bits under
+MP-SPDZ's \code{replicated-bin} protocol (\cref{fig:domains}). Bit $j$ of all $n$ bidders is
+packed into one $n$-bit word, so each line of \cref{alg:scan} is a single word-wide operation, and
+\cref{eq:update} becomes $S' = S \oplus (c_j \wedge (S \oplus t))$. XOR and NOT are free and each
+AND costs one bit per server. The winner index needs no arithmetic: since $w$ is one-hot, bit $m$
+of the index is the XOR of the $w_i$ whose index has bit $m$ set.
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.95\linewidth}{!}{\input{diagrams/domains.tex}}
+  \caption{Arithmetic versus binary domain. The circuit and its AND count are identical; only the
+           cost of each AND changes.}
+  \label{fig:domains}
+\end{figure}
+
+\subsection{Baseline: a tournament of secure comparisons}
+
+To evaluate the bit-slice approach against the ``naive'' approach of survey \S5.1, we implement a
+knockout tournament (\cref{fig:tournament}) using MP-SPDZ's built-in secure comparison, in both
+domains (\code{baseline\_tournament.mpc}, \code{baseline\_tournament\_bin.mpc}). Each level compares
+neighbouring brackets in one vectorised step and multiplexes the running maximum, runner-up and
+index. Neighbours are paired as $(2i, 2i+1)$ and the right bracket wins only on a strict $>$, so the
+lowest index wins ties.
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.8\linewidth}{!}{\input{diagrams/tournament.tex}}
+  \caption{Comparison-tournament baseline ($n=8$).}
+  \label{fig:tournament}
+\end{figure}
+
+% ==============================================================================
+\section{Security Analysis}
+\label{sec:security}
+
+\paragraph{Ideal functionality.}
+$\mathcal{F}_\text{auction}$ receives every bid and returns $(i^\star, p)$, the lowest-index
+highest bidder and its price under the chosen rule. We argue that the protocol securely realises
+$\mathcal{F}_\text{auction}$ against a semi-honest adversary statically corrupting one server.
+
+\paragraph{Simulation sketch.}
+The corrupted server's view consists of three parts, each of which a simulator given only
+$(i^\star, p)$ can reproduce.
+\begin{enumerate}
+  \item \emph{Inputs.} For every bid (or bit), it holds one share $s_p$ of
+        $b = s_0 + s_1 + s_2$, where the bidder chose two shares uniformly at random. Any single
+        share is therefore uniform on $\Z_{2^{64}}$ (or on $k$-bit strings for XOR sharing) and
+        independent of $b$, so the simulator samples random values. Our test suite checks this
+        empirically with a $\chi^2$ test (\code{test\_single\_share\_looks\_uniform}).
+  \item \emph{Computation.} The program is a fixed composition of local operations and secure
+        multiplications of the replicated protocol, each simulatable for one corrupted
+        party~\cite{araki16}. Control flow, number of rounds and message sizes depend only on the
+        public parameters $(n, k, \text{mechanism})$, so nothing leaks through them.
+  \item \emph{Outputs.} Exactly two values are opened. Given $(i^\star, p)$ the simulator chooses
+        the honest parties' opening messages consistent with them.
+\end{enumerate}
+By sequential composition, the corrupted server learns nothing beyond $(i^\star, p)$.
+
+\paragraph{Reveal audit.}
+\code{auction/audit.py} recompiles the programs and checks MP-SPDZ's count of opened values. The
+arithmetic program opens exactly 2 integers and the binary program reveals exactly two words, for
+every $n$ and both mechanisms. The tournament baseline, by contrast, also opens masked values inside
+MP-SPDZ's comparison protocol.
+
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{Party} & \textbf{What it sees} \\
+\midrule
+Bidder & its own bid, its own shares, and the public output $(i^\star, p)$ \\
+One server & uniformly random shares of every bid, protocol messages that are themselves fresh
+             random shares, and $(i^\star, p)$ \\
+Network observer & encrypted channels (MP-SPDZ uses TLS between servers); at most shares \\
+Two colluding servers & \emph{outside the model}: together they can reconstruct every bid \\
+\bottomrule
+\end{tabularx}
+\caption{Per-party view, matching the threat model of the survey (\S7.2).}
+\label{tab:views}
+\end{table}
+
+\paragraph{Inherent leakage.}
+As stated in the survey, information implied by the output itself is not a leak: a first-price
+outcome reveals that every losing bid is at most $p$; a Vickrey outcome reveals that $p$ is the
+second-highest bid. Ranks, orderings and ties among losers stay hidden.
+
+\paragraph{Limitations of the guarantee.}
+Bidders are trusted to submit well-formed inputs: a malicious bidder could share a ``bit'' equal
+to 2 and corrupt the result. Computing and opening $b_i[j](1 - b_i[j])$, which is 0 for every
+valid bit, would detect this at the cost of $nk$ extra multiplications. Under the malicious protocols of \cref{sec:security-eval}, the \emph{computation} is
+secure with abort against one malicious server, but a malicious server could still substitute its
+input share of a bid, since bidder shares are not authenticated. MP-SPDZ's client-input protocol,
+in which bidders mask their inputs with preprocessed random values, would close this gap.
+
+% ==============================================================================
+\section{Implementation}
+\label{sec:impl}
+
+The code base is organised into the four components declared in the mid-term report
+(\cref{fig:components}); \cref{fig:workflow} shows how they interact in one run.
+
+\begin{figure}[H]
+  \centering
+  \resizebox{\linewidth}{!}{\input{diagrams/components.tex}}
+  \caption{Code components and their owners, as declared in the mid-term report.}
+  \label{fig:components}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.95\linewidth}{!}{\input{diagrams/workflow.tex}}
+  \caption{End-to-end workflow of one auction, with the file responsible for each step.}
+  \label{fig:workflow}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{MPC programs} (\code{mpc/}): \code{auction.mpc} (arithmetic),
+        \code{auction\_bin.mpc} (binary), and the two tournament baselines. Each takes
+        $n$, $k$ and the mechanism as compile-time arguments. All operations are vectorised over
+        the $n$ bidders.
+  \item \textbf{Runner} (\code{auction/runner.py}): compiles a program (cached by source
+        timestamp), writes each server's input file to a private temporary directory, launches the
+        three party processes on free localhost ports, and parses the result and MP-SPDZ's cost
+        report. If one server crashes, it stops the others at once and retries on a fresh port.
+  \item \textbf{References} (\code{auction/reference.py}): the plaintext auction rule, and a
+        bit-level simulation of \cref{alg:scan} using the same arithmetic as the MPC.
+  \item \textbf{Command-line demo} (\code{python -m auction}): runs any program and mechanism, can
+        show what each server receives, and can check the result against the reference.
+  \item \textbf{Setup} (\code{setup/setup.sh}): checks prerequisites, installs MP-SPDZ 0.4.3,
+        creates the Python environment and runs a smoke test, on Linux or Windows via WSL2.
+\end{itemize}
+
+\paragraph{Testing.}
+\Cref{fig:validation} summarises the validation strategy. The plaintext rule is the ground truth.
+The bit-level simulation is checked exhaustively for $n \le 3$, $k = 3$ and on 6\,000 random cases.
+Every MPC program is run on nine edge cases (ties at the top, ties for second place, a single
+bidder, all-equal bids, all zeros, the maximum value, the winner last) and on random inputs with
+forced ties, for both mechanisms; the main programs are also run under malicious security. In
+total the suite has 147 tests and runs in about 9 seconds. The benchmark harness additionally
+checks every one of its 760 runs against the reference.
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.82\linewidth}{!}{\input{diagrams/validation.tex}}
+  \caption{Validation strategy: every layer is checked against the plaintext auction rule.}
+  \label{fig:validation}
+\end{figure}
+
+% ==============================================================================
+\section{Evaluation}
+\label{sec:eval}
+
+\paragraph{Setup.}
+All experiments run the three servers as separate processes on one machine (AMD Ryzen 7 6800H,
+8 cores / 16 threads, 14\,GB RAM, Ubuntu 24.04, MP-SPDZ 0.4.3). Bids are uniformly random; each
+configuration is repeated 5 times and we report the median local time. Rounds and data are
+MP-SPDZ's per-server figures (the protocols are symmetric) and include preprocessing. Because
+localhost has almost no latency, we also report a \emph{modelled} time
+\[
+  T = T_\text{local} + \text{rounds} \times \text{RTT} + \text{bytes} / \text{bandwidth}
+\]
+for a LAN (1\,ms RTT, 1\,Gbit/s) and a WAN (50\,ms RTT, 100\,Mbit/s). Rounds and data are measured;
+only the network is modelled. We compare four variants: bit-slice and tournament, each in both
+domains.
+
+\subsection{The cost model is exact}
+
+Counting operations in \cref{alg:scan} gives $k(3n-1)$ ANDs and $k(\lceil\log_2 n\rceil + 2)$
+rounds per scan. The tie-break adds $P(n) + n$ ANDs, where
+$P(n) = \sum_{d = 1, 2, 4, \ldots < n} (n - d)$ is the cost of the prefix product. Vickrey adds the
+$nk$ ANDs that zero the winner and a second scan. \Cref{tab:model} compares these predictions with
+MP-SPDZ's compiler: they agree exactly, in both domains.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}rrlrrr@{}}
+\toprule
+$n$ & $k$ & mechanism & predicted ANDs & compiled (arithmetic) & compiled (binary) \\
+\midrule
+3   & 4  & Vickrey & 82     & 82     & 82 \\
+5   & 8  & Vickrey & 277    & 277    & 277 \\
+128 & 32 & first   & 13\,153 & 13\,153 & 13\,153 \\
+128 & 32 & Vickrey & 29\,505 & 29\,505 & 29\,505 \\
+256 & 32 & Vickrey & 59\,329 & 59\,329 & 59\,329 \\
+\bottomrule
+\end{tabular}
+\caption{Predicted versus compiled AND counts. Example: for $n=128$, $k=32$, first-price,
+$32 \cdot 383 + P(128) + 128 = 12\,256 + 769 + 128 = 13\,153$.}
+\label{tab:model}
+\end{table}
+
+\subsection{Scaling with the number of bidders and the bid length}
+
+\Cref{fig:scale-n} shows rounds and data as $n$ grows from 2 to 256 with $k = 32$. All variants
+grow linearly in data. The bit-slice rounds grow by about $k = 32$ per doubling of $n$, exactly the
+$k\lceil\log_2 n\rceil$ term, while the tournament adds only about 10 rounds per doubling.
+\Cref{tab:scale-k} isolates the bid length: the bit-slice scan is sequential in $k$, so its rounds
+grow linearly, whereas the tournament's rounds stop growing at all beyond $k = 32$ because
+MP-SPDZ's comparison needs only $O(\log k)$ rounds.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{../bench/results/fig_scale_n.png}
+  \caption{Rounds (top) and data per server (bottom, log scale) against the number of bidders,
+           $k = 32$. Colour: algorithm; dashed lines with hollow markers: binary domain.}
+  \label{fig:scale-n}
+\end{figure}
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+rounds, Vickrey, $n = 32$ & $k = 8$ & $k = 32$ & $k = 60$ \\
+\midrule
+Bit-slice, arithmetic   & 121 & 457 & 849 \\
+Bit-slice, binary       & 125 & 461 & 853 \\
+Tournament, arithmetic  & 50  & 62  & 62  \\
+Tournament, binary      & 66  & 86  & 86  \\
+\bottomrule
+\end{tabular}
+\caption{Rounds against the bid length. The bit-slice scan is linear in $k$; the comparison-based
+tournament is not.}
+\label{tab:scale-k}
+\end{table}
+
+\subsection{Arithmetic versus binary domain}
+
+\Cref{tab:main} lists every variant at $n = 128$, $k = 32$. Moving the bit-slice circuit to the
+binary domain leaves its AND count and rounds unchanged but cuts its data from 0.269\,MB to
+0.0044\,MB per server, a $61\times$ reduction. The same move helps the tournament just as much
+(0.197\,MB to 0.0049\,MB). Within the binary domain, bit-slice needs 14\% fewer ANDs than the
+tournament (29\,505 vs.\ 34\,163) and about 10\% less data; for small $n$ the tournament is slightly
+lighter.
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+Variant (Vickrey) & ANDs & rand.\ bits & rounds & MB/server & local (ms) & LAN (s) & WAN (s) \\
+\midrule
+Bit-slice, arithmetic          & 29\,505 & 0     & 587 & 0.2688 & 19.4 & 0.61 & 29.4 \\
+Tournament, arithmetic         & 15\,621 & 8\,636 & 82  & 0.1972 & 5.1  & 0.09 & 4.1 \\
+Bit-slice, binary              & 29\,505 & 0     & 591 & 0.0044 & 18.2 & 0.61 & 29.6 \\
+Tournament, binary             & 34\,163 & 0     & 118 & 0.0049 & 4.3  & 0.12 & 5.9 \\
+\bottomrule
+\end{tabular}
+\caption{All variants at $n = 128$, $k = 32$, Vickrey. LAN and WAN times are modelled from the
+measured rounds and data. First-price costs about half (e.g.\ bit-slice arithmetic: 13\,153 ANDs,
+298 rounds, 0.138\,MB).}
+\label{tab:main}
+\end{table}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{../bench/results/fig_wan.png}
+  \caption{Modelled end-to-end time on a LAN and a WAN (Vickrey, $k = 32$, log scale).}
+  \label{fig:wan}
+\end{figure}
+
+\subsection{Modelled network time}
+
+On a real network, rounds dominate (\cref{fig:wan}). With 50\,ms of latency the bit-slice auction
+over 128 bidders takes about 29\,s against 4--6\,s for the tournament; even on a 1\,ms LAN it takes
+0.61\,s against 0.09--0.12\,s. The two bit-slice lines coincide: once data is this small, the
+domain no longer matters for time, only the rounds do.
+
+\subsection{Cost of malicious security}
+\label{sec:security-eval}
+
+All four programs run unchanged under MP-SPDZ's malicious protocols (\cref{fig:security}). In the
+arithmetic domain, communication grows by a factor of about 6 (bit-slice at $n = 64$:
+0.134\,MB to 0.823\,MB), with few extra rounds. In the binary domain, the malicious cost is almost
+constant at about 0.11--0.13\,MB per server over the sizes we tested, because it is dominated by
+MP-SPDZ generating and checking multiplication triples in large fixed batches, not by the circuit.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.92\linewidth]{../bench/results/fig_security.png}
+  \caption{Data per server, semi-honest versus malicious security with abort (Vickrey, $k = 32$).}
+  \label{fig:security}
+\end{figure}
+
+% ==============================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Why the baseline wins.}
+The survey (\S5.4) argued that the bit-slice scan beats a tournament of comparisons on constants
+and round complexity, and Kurosawa and Ogata report a $7\times$ speed-up over the best construction
+of their time. Our measurements do not support this on modern MPC. The scan has an inherent
+sequential dependency: bit $j - 1$ cannot be processed before the mask from bit $j$ is known,
+giving $\Theta(k \log n)$ rounds. MP-SPDZ's comparison uses preprocessed random bits and takes
+$O(\log k)$ rounds, so the tournament needs $O(\log n \cdot \log k)$. The claimed advantage was
+relative to comparison protocols of 2002, which needed far more rounds than today's.
+
+\paragraph{Where bit-slice still has an edge.}
+In the binary domain it needs the fewest ANDs and the least data for large $n$; it opens exactly
+two values, whereas the tournament opens $2n$ masked values inside its comparisons; it needs no
+comparison sub-protocol or preprocessed random bits, only multiplication; and the same scan carries
+over to very different trust models, such as the auctioneer-free SEAL protocol~\cite{seal}, where
+comparisons are not available. In a setting where bandwidth is the bottleneck and latency is
+negligible, binary bit-slice is the cheapest option we measured.
+
+\paragraph{Domain matters more than algorithm.}
+Choosing the binary domain changes communication by $61\times$; choosing between the two
+algorithms within one domain changes it by about 10\%. For any boolean-heavy MPC workload, the
+domain is the first design decision to make.
+
+\paragraph{Corrections to the literature survey.}
+\begin{itemize}
+  \item Table~1 printed the mask after bits 1 and 0 as $\{\}$; it should be $\{B\}$
+        (\cref{fig:worked}).
+  \item \S5.2 describes the update as a branch on the check bit. A secure implementation must be
+        branch-free; \cref{eq:update} gives the oblivious form.
+  \item \S5.4's round-complexity argument holds against 2002-era comparisons but not against
+        modern ones, as discussed above.
+\end{itemize}
+
+% ==============================================================================
+\section{Limitations and Future Work}
+
+\begin{itemize}
+  \item \textbf{Malicious servers and input integrity.} The computation runs under malicious
+        security, but bidder inputs should be authenticated, for example with MP-SPDZ's client
+        interface, so that a server cannot substitute a share.
+  \item \textbf{Public verifiability.} As surveyed in \S6, commitments and zero-knowledge proofs
+        (as in Galal and Youssef~\cite{galal}) could let anyone verify the outcome; combining this
+        with input privacy remains open in our system.
+  \item \textbf{Fewer rounds for bit-slice.} Processing $r$ bits per step (a radix-$2^r$ scan)
+        would divide the $k$ term in the round count by $r$ at the price of more ANDs per step.
+  \item \textbf{More servers and real networks.} Shamir sharing with more servers would tolerate
+        more corruptions; a deployment across real machines would replace our modelled network
+        times with measured ones.
+  \item \textbf{Auctioneer-free variant.} Implementing the scan with the SEAL protocol~\cite{seal}
+        would remove the servers altogether.
+\end{itemize}
+
+% ==============================================================================
+\section{Individual Contributions}
+
+The work was divided into the four components declared in the mid-term report.
+
+\begin{description}[style=nextline, leftmargin=1.2em]
+  \item[Aarav Oswal (230012): computation environment and testing]
+        Installation and configuration of MP-SPDZ for the 3-server setting, including Windows
+        support through WSL2 (\code{setup/}); the runner that compiles programs, launches the
+        servers and parses their output (\code{runner.py}); the plaintext reference and bit-level
+        simulation (\code{reference.py}); and the 147-test suite that validates every component
+        against the reference.
+  \item[Ch.\ Rishitha (230311): bit-slice maximum circuit]
+        The oblivious bit-slice scan in both domains (\code{auction.mpc}, \code{auction\_bin.mpc}):
+        the branch-free mask update, the log-depth OR tree, the oblivious lowest-index tie-break,
+        and the extraction of the maximum from the per-bit OR results.
+  \item[R.\ Charan (230819): Vickrey extension and performance evaluation]
+        The oblivious second scan for the Vickrey price; the comparison-tournament baselines in
+        both domains; the benchmark harness and figures (\code{bench/}); and the analysis of
+        scaling, network cost and malicious-security overhead.
+  \item[Poorvie Sadagopan (230759): input and output pipeline]
+        Bidder-side additive and XOR secret sharing and the server input layout
+        (\code{sharing.py}); the output boundary that opens only the winner and price, verified by
+        the reveal audit (\code{audit.py}); and the command-line demo (\code{cli.py}).
+\end{description}
+
+% ==============================================================================
+\section{Conclusion}
+
+We built a privacy-preserving sealed-bid auction in which three servers compute the winner and
+the first- or second-price outcome without any of them seeing a bid, opening only the winner and
+the price. The bit-slice circuit is simple, oblivious and exactly predictable in cost, and moving
+it to the binary domain cuts its communication by $61\times$. Our evaluation also shows that its
+sequential dependency on the bid length makes it slower than a modern comparison-based tournament
+on any network with real latency, an honest correction to our own survey and a useful lesson about
+how far a 2002 efficiency claim carries into today's MPC.
+
+\paragraph{Reproducing the results.}
+\code{bash setup/setup.sh} installs everything; \code{.venv/bin/pytest -q} runs the tests;
+\code{.venv/bin/python bench/run\_bench.py} and \code{bench/plot.py} regenerate every number and
+figure in \cref{sec:eval}. Source code: \url{https://github.com/rcharan05/CS670_Project}.
+
+% ==============================================================================
+\begin{thebibliography}{99}\small
+\bibitem{araki16} T.~Araki, J.~Furukawa, Y.~Lindell, A.~Nof, K.~Ohara.
+  High-throughput semi-honest secure three-party computation with an honest majority.
+  In \emph{ACM CCS}, pages 805--817, 2016. doi:10.1145/2976749.2978331.
+\bibitem{seal} S.~Bag, F.~Hao, S.~F.~Shahandashti, I.~G.~Ray.
+  SEAL: Sealed-bid auction without auctioneers.
+  \emph{IEEE TIFS}, 15:2042--2052, 2020. doi:10.1109/TIFS.2019.2955793.
+\bibitem{bogetoft06} P.~Bogetoft, I.~Damg{\aa}rd, T.~Jakobsen, K.~Nielsen, J.~Pagter, T.~Toft.
+  A practical implementation of secure auctions based on multiparty integer computation.
+  In \emph{Financial Cryptography}, LNCS 4107, pages 142--147, 2006. doi:10.1007/11889663\_10.
+\bibitem{bogetoft09} P.~Bogetoft, D.~L.~Christensen, I.~Damg{\aa}rd, M.~Geisler, T.~Jakobsen,
+  M.~Kr{\o}igaard, J.~D.~Nielsen, J.~B.~Nielsen, K.~Nielsen, J.~Pagter, M.~Schwartzbach, T.~Toft.
+  Secure multiparty computation goes live.
+  In \emph{Financial Cryptography}, LNCS 5628, pages 325--343, 2009.
+  doi:10.1007/978-3-642-03549-4\_20.
+\bibitem{furukawa17} J.~Furukawa, Y.~Lindell, A.~Nof, O.~Weinstein.
+  High-throughput secure three-party computation for malicious adversaries and an honest majority.
+  In \emph{EUROCRYPT}, 2017.
+\bibitem{galal} H.~S.~Galal, A.~M.~Youssef.
+  Verifiable sealed-bid auction on the Ethereum blockchain.
+  In \emph{Financial Cryptography Workshops}, LNCS 10958, pages 265--278, 2019.
+  doi:10.1007/978-3-662-58820-8\_18.
+\bibitem{mpspdz} M.~Keller.
+  MP-SPDZ: A versatile framework for multi-party computation.
+  In \emph{ACM CCS}, pages 1575--1590, 2020. doi:10.1145/3372297.3417872.
+\bibitem{ko02} K.~Kurosawa, W.~Ogata.
+  Bit-slice auction circuit.
+  In \emph{ESORICS}, LNCS 2502, pages 24--38, 2002. doi:10.1007/3-540-45853-0\_2.
+\bibitem{lindellnof17} Y.~Lindell, A.~Nof.
+  A framework for constructing fast MPC over arithmetic circuits with malicious adversaries and an
+  honest-majority. In \emph{ACM CCS}, 2017.
+\bibitem{nps99} M.~Naor, B.~Pinkas, R.~Sumner.
+  Privacy preserving auctions and mechanism design.
+  In \emph{ACM EC}, pages 129--139, 1999. doi:10.1145/336992.337028.
+\end{thebibliography}
+
+\end{document}

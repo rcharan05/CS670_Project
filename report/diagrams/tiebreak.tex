@@ -1,0 +1,16 @@
+% Oblivious lowest-index tie-break: keep only the first survivor.
+\begin{tikzpicture}[x=0.8cm, y=0.75cm]
+  \foreach \i in {0,...,4} \node[lbl] at (\i, 0.8) {$i{=}\i$};
+  \foreach \r/\lab/\vals/\col in {
+      0/{final mask $S$}/{0,1,0,1,1}/vblue,
+      1/{no survivor before $i$}/{1,1,0,0,0}/vblue,
+      2/{$w = S \wedge$ (row above)}/{0,1,0,0,0}/vblue} {
+    \node[font=\small, anchor=east] at (-0.7, -\r) {\lab};
+    \foreach \v [count=\c from 0] in \vals
+      \node[bitcell, fill=vbluebg, draw=\col] at (\c, -\r) {\v};
+  }
+  \node[outbox, anchor=west] at (5.2, -2) {winner $= \sum_i i\cdot w_i = 1$};
+  \node[note, anchor=west, text width=5.6cm] at (5.2, -0.5)
+    {bidders 1, 3, 4 tied; only the index 1 is opened, never the tie};
+  \node[note] at (2, -3.05) {prefix product: $\lceil\log_2 n\rceil$ rounds};
+\end{tikzpicture}

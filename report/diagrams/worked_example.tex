@@ -1,0 +1,32 @@
+% Bit-slice scan on A = 11, B = 13, C = 9 (corrected Table 1 of the lit survey).
+% Blue cells: bidder still a survivor when that bit is examined.
+\begin{tikzpicture}[x=1.45cm, y=0.72cm]
+  % header
+  \foreach \c/\lab in {0/{bit 3\\[-2pt]\scriptsize(MSB)}, 1/{bit 2}, 2/{bit 1}, 3/{bit 0\\[-2pt]\scriptsize(LSB)}}
+    \node[lbl, align=center] at (\c, 1.05) {\lab};
+  % rows: name, value, bits (MSB first), survivor flags per column
+  \foreach \r/\name/\val/\bits/\alive in {
+      0/A/11/{1,0,1,1}/{1,1,0,0},
+      1/B/13/{1,1,0,1}/{1,1,1,1},
+      2/C/9/{1,0,0,1}/{1,1,0,0}} {
+    \node[font=\small, anchor=east] at (-0.55, -\r) {$\name = \val$};
+    \foreach \bit [count=\c from 0] in \bits {
+      \pgfmathsetmacro{\a}{{\alive}[\c]}
+      \ifdim \a pt > 0.5pt
+        \node[bitcell, fill=vbluebg, draw=vblue] at (\c, -\r) {\bit};
+      \else
+        \node[bitcell, fill=vlight, text=vline] at (\c, -\r) {\bit};
+      \fi
+    }
+  }
+  % c_j row and mask row
+  \node[font=\small, anchor=east] at (-0.55, -3.2) {$c_j$: a survivor has a 1?};
+  \node[font=\small, anchor=east] at (-0.55, -4.2) {mask $S$ after this bit};
+  \foreach \c/\cj/\mask in {0/1/{\{A,B,C\}}, 1/1/{\{B\}}, 2/0/{\{B\}}, 3/1/{\{B\}}} {
+    \node[bitcell, fill=vaquabg, draw=vaqua] at (\c, -3.2) {\cj};
+    \node[font=\footnotesize] at (\c, -4.2) {$\mask$};
+  }
+  \node[outbox, anchor=west] at (3.65, -3.2) {max $= 1101_2 = 13$\\winner: B};
+  \node[note, anchor=west, text width=3.4cm] at (3.65, -0.9)
+    {bit 1: no survivor has a 1 ($c_1 = 0$), so the mask is \textbf{carried forward}};
+\end{tikzpicture}

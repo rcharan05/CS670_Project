@@ -1,0 +1,20 @@
+% Code components and team ownership (as declared in the mid-term report).
+\begin{tikzpicture}[node distance=0.5cm and 0.55cm]
+  \tikzset{comp/.style={box, text width=3.7cm, minimum height=2.2cm, align=left, font=\footnotesize}}
+  \node[comp, fill=vbluebg, draw=vblue] (d1) {\textbf{D. Input pipeline}\\Poorvie Sadagopan\\[3pt]
+    \texttt{sharing.py}: additive / XOR shares, server input files};
+  \node[comp, fill=vorangebg, draw=vorange, right=of d1] (b) {\textbf{B. Bit-slice circuit}\\Ch.\ Rishitha\\[3pt]
+    \texttt{auction.mpc}, \texttt{auction\_bin.mpc}: scan, OR tree, tie-break};
+  \node[comp, fill=vorangebg, draw=vorange, right=of b] (c) {\textbf{C. Vickrey \& evaluation}\\R.\ Charan\\[3pt]
+    second scan, tournament baselines, \texttt{bench/}};
+  \node[comp, fill=vaquabg, draw=vaqua, right=of c] (d2) {\textbf{D. Output boundary}\\Poorvie Sadagopan\\[3pt]
+    open only winner + price; \texttt{audit.py}, \texttt{cli.py}};
+  \draw[arr] (d1) -- (b); \draw[arr] (b) -- (c); \draw[arr] (c) -- (d2);
+
+  \node[comp, fill=vlight, draw=vline, text width=17.0cm, minimum height=1.1cm,
+        below=0.75cm of $(b.south)!0.5!(c.south)$] (a)
+    {\textbf{A. Environment \& testing} --- Aarav Oswal\quad
+     \texttt{setup/} (MP-SPDZ install, WSL support), \texttt{runner.py} (compile, launch 3 servers, parse),
+     \texttt{reference.py} + \texttt{tests/} (plaintext reference, 147 tests)};
+  \foreach \x in {d1, b, c, d2} \draw[arr, draw=vline] (a.north -| \x.south) -- (\x.south);
+\end{tikzpicture}

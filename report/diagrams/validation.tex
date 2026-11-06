@@ -1,0 +1,23 @@
+% Validation strategy: every layer is checked against the plaintext rule.
+\begin{tikzpicture}[node distance=0.32cm]
+  \tikzset{layer/.style={box, text width=10.2cm, align=left, font=\footnotesize, minimum height=0.95cm}}
+  \node[layer, fill=vaquabg, draw=vaqua] (l1)
+    {\textbf{Ground truth}: plaintext auction rule (max / second max, lowest index wins ties)};
+  \node[layer, fill=vbluebg, draw=vblue, below=of l1] (l2)
+    {\textbf{Bit-level simulation} of the oblivious formulas: exhaustive for $n \le 3$, $k = 3$,
+     plus 6\,000 random cases with forced ties};
+  \node[layer, fill=vorangebg, draw=vorange, below=of l2] (l3)
+    {\textbf{Real 3-server MPC runs}: 4 programs $\times$ 2 mechanisms $\times$ 9 edge cases, random
+     cases up to $n = 70$, malicious-security runs};
+  \node[layer, fill=vlight, draw=vline, below=of l3] (l4)
+    {\textbf{Reveal audit}: compiled bit-slice programs open exactly the winner and the price};
+  \node[layer, fill=vlight, draw=vline, below=of l4] (l5)
+    {\textbf{Benchmark sweep}: every one of 760 runs (152 configurations $\times$ 5) checked};
+  \draw[arr, draw=vaqua] (l2.east) -- ++(0.55,0) |- (l1.east);
+  \draw[arr, draw=vaqua] (l3.east) -- ++(0.55,0) |- (l1.east);
+  \draw[arr, draw=vaqua] (l5.east) -- ++(0.55,0) |- (l1.east);
+  \node[lbl, text=vaqua, rotate=90] at ($(l1.east)+(0.85,-2.4)$) {compared against};
+  \draw[decorate, decoration={brace, amplitude=6pt}, draw=vgray]
+    ($(l4.south west)+(-0.15,0)$) -- ($(l2.north west)+(-0.15,0)$)
+    node[midway, left=8pt, lbl, align=center] {\textbf{147}\\automated\\tests};
+\end{tikzpicture}

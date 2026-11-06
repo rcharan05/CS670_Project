@@ -1,0 +1,21 @@
+% End-to-end workflow of one auction, at the level of the protocol (no code).
+\begin{tikzpicture}[node distance=0.55cm and 1.2cm]
+  \node[stepbox, secret] (s1) {\textbf{1. Encode}\\bidder writes its bid\\in binary: $13 \to 1101$};
+  \node[stepbox, secret, right=of s1] (s2) {\textbf{2. Share}\\each bit split into 3\\random shares};
+  \node[stepbox, server, right=of s2] (s3) {\textbf{3. Combine}\\servers re-share:\\each holds 2 of 3};
+
+  \node[stepbox, server, below=1.3cm of s3] (s4) {\textbf{4. Scan}\\bit by bit, find\\the highest bid};
+  \node[stepbox, server, left=of s4] (s5) {\textbf{5. Tie-break}\\keep one winner;\\Vickrey: scan again};
+  \node[stepbox, outbox, left=of s5] (s6) {\textbf{6. Open}\\only winner and\\price are revealed};
+
+  \draw[arr] (s1) -- (s2);
+  \draw[arr] (s2) -- node[lbl, above] {1 share} node[lbl, below] {per server} (s3);
+  \draw[arr] (s3) -- (s4);
+  \draw[arr] (s4) -- (s5);
+  \draw[arr] (s5) -- (s6);
+
+  \node[note, above=2pt of $(s1.north)!0.5!(s2.north)$] {on the bidder's own device};
+  \node[note, above=2pt of s3] {3 servers};
+  \node[note, below=2pt of $(s4.south)!0.5!(s5.south)$] {all values stay secret-shared};
+  \node[note, below=2pt of s6] {nothing else is opened};
+\end{tikzpicture}

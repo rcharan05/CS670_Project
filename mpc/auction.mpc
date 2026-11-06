@@ -1,0 +1,91 @@
+# Privacy-preserving sealed-bid auction: Kurosawa-Ogata bit-slice circuit.
+#
+# Compile:  ./compile.py -R 64 auction.mpc <n> <k> <first|vickrey> <bits|int>
+#
+# Each of the 3 servers inputs its additive shares of the bids (layout in
+# auction/sharing.py); the shares are summed inside the MPC so no server ever
+# holds a bid. The program opens exactly two values: the winner's index and
+# the clearing price. Every other intermediate value (survivor masks, the
+# per-bit OR results, tie information) stays secret-shared.
+
+N_SERVERS = 3
+
+n = int(program.args[1])
+k = int(program.args[2])
+mechanism = program.args[3]
+encoding = program.args[4]
+assert mechanism in ('first', 'vickrey')
+assert encoding in ('bits', 'int')
+
+
+def read_shared(size):
+    """Sum each server's additive shares of `size` values (local, no communication)."""
+    return sum(sint.get_input_from(p, size=size) for p in range(N_SERVERS))
+
+
+def tree_product(v):
+    """Product of all entries of a sint vector: n-1 mults in ceil(log2 n) rounds."""
+    while v.size > 1:
+        half = v.size // 2
+        prod = v.get_vector(0, half) * v.get_vector(half, half)
+        if v.size % 2:
+            prod = sint.concat([prod, v.get_vector(2 * half, 1)])
+        v = prod
+    return v
+
+
+def exclusive_prefix_product(v):
+    """out[i] = prod_{l<i} v[l] (out[0] = 1), via Hillis-Steele in log2 n rounds."""
+    size = v.size
+    d = 1
+    while d < size:
+        shifted = v.get_vector(0, size - d)
+        v = sint.concat([v.get_vector(0, d), v.get_vector(d, size - d) * shifted])
+        d *= 2
+    if size == 1:
+        return sint(1, size=1)
+    return sint.concat([sint(1, size=1), v.get_vector(0, size - 1)])
+
+
+def bitslice_scan(bits):
+    """bits[j]: vector of bit j of every bidder. Returns (mask, c) with
+    mask[i] = 1 iff bidder i holds the max and c[j] = bit j of the max."""
+    S = sint(1, size=n)
+    c = [None] * k
+    for j in reversed(range(k)):
+        t = S * bits[j]                                  # survivor has a 1 here
+        c[j] = 1 - tree_product(1 - t)                   # OR over all bidders
+        S = S - c[j].expand_to_vector(n) * (S - t)       # = S * (1 - c (1 - b))
+    return S, c
+
+
+def from_bits(c):
+    return sum(c[j] * (2 ** j) for j in range(k))
+
+
+# --- input --------------------------------------------------------------------
+if encoding == 'bits':
+    flat = read_shared(n * k)
+    bits = [flat.get_vector(j * n, n) for j in range(k)]
+else:
+    bids = read_shared(n)
+    bits = bids.bit_decompose(k)
+
+# --- first scan: winner ---------------------------------------------------------
+mask, c = bitslice_scan(bits)
+# Several bidders may tie for the max; keep only the lowest index so the
+# opened output does not reveal who else tied.
+w = mask * exclusive_prefix_product(1 - mask)
+winner = sum((w[i] * i for i in range(1, n)), sint(0))
+
+# --- price ----------------------------------------------------------------------
+if mechanism == 'first':
+    price = from_bits(c)
+else:
+    # Remove the winner obliviously and rescan; the new maximum is the
+    # second-highest bid. The first-scan c[j] are never opened.
+    keep = 1 - w
+    _, c2 = bitslice_scan([b * keep for b in bits])
+    price = from_bits(c2)
+
+print_ln('RESULT winner=%s price=%s', winner.reveal(), price.reveal())

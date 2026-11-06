@@ -1,0 +1,22 @@
+% Baseline: knockout tournament of secure comparisons (n = 8).
+\begin{tikzpicture}[x=1.05cm, y=1.0cm]
+  \foreach \i in {0,...,7}
+    \node[secret, minimum width=0.8cm, inner sep=2pt] (b\i) at (\i, 0) {$b_{\i}$};
+  \foreach \i/\a/\b in {0/0/1, 1/2/3, 2/4/5, 3/6/7} {
+    \node[gate, minimum width=0.85cm] (l\i) at ({\a+0.5}, 1.2) {$\max$};
+    \draw[arr] (b\a) -- (l\i); \draw[arr] (b\b) -- (l\i);
+  }
+  \foreach \i/\a/\b in {0/0/1, 1/2/3} {
+    \node[gate, minimum width=0.85cm] (m\i) at ({2*\a+1.5}, 2.4) {$\max$};
+    \draw[arr] (l\a) -- (m\i); \draw[arr] (l\b) -- (m\i);
+  }
+  \node[gate, minimum width=0.85cm] (r) at (3.5, 3.6) {$\max$};
+  \draw[arr] (m0) -- (r); \draw[arr] (m1) -- (r);
+  \node[outbox] (o) at (3.5, 4.75) {winner, price};
+  \draw[outarr] (r) -- (o);
+
+  \node[note, anchor=west, text width=5.3cm, align=left] at (7.9, 2.4)
+    {each node: secure comparison $a > b$ + multiplexers on (max, runner-up, index)\\[3pt]
+     $\log_2 n$ levels $\times$ $O(\log k)$ rounds per comparison\\[3pt]
+     right bracket wins only on strict $>$ $\Rightarrow$ lowest index wins ties};
+\end{tikzpicture}
