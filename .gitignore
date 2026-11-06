@@ -1,0 +1,17 @@
+.venv/
+third_party/
+__pycache__/
+.pytest_cache/
+bench/results/run_log.txt
+
+# LaTeX build files (the PDFs are kept)
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.out
+*.toc
+*.nav
+*.snm
+*.vrb
+*.loa
